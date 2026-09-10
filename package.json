@@ -1,0 +1,43 @@
+{
+  "name": "ai-crm",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:api": "tsx watch server/index.ts",
+    "start:api": "tsx server/index.ts",
+    "build:api": "tsc -p tsconfig.server.json",
+    "create-admin": "tsx scripts/create-admin.ts",
+    "test:api": "tsx scripts/test-api.ts",
+    "test:customers": "tsx scripts/test-customers.ts",
+    "test:opportunities": "tsx scripts/test-opportunities.ts",
+    "test:products-quotes": "tsx scripts/test-products-quotes.ts",
+    "test:product-collection": "tsx scripts/test-product-collection.ts",
+    "test:ai": "tsx scripts/test-ai.ts",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.3.0",
+    "@fastify/jwt": "^10.2.1",
+    "@vitejs/plugin-react": "latest",
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^17.4.2",
+    "fastify": "^5.11.2",
+    "lucide-react": "latest",
+    "pg": "^8.22.0",
+    "react": "latest",
+    "react-dom": "latest",
+    "typescript": "latest",
+    "vite": "latest",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.4",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "tsx": "^4.23.5"
+  }
+}
