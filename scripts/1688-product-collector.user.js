@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         销途 CRM · 1688/Alibaba 商品采集器
 // @namespace    https://cc.local
-// @version      2.1.0
+// @version      2.1.3
 // @description  从 1688、Alibaba.com 完整采集商品并直接保存到销途 CRM
 // @author       cc
 // @noframes
@@ -1075,8 +1075,33 @@
             };
         });
     }
+    function extract1688SourceCategoryAttributes(data) {
+        let domain = getDataJson(data)?.offerDomain;
+        if (typeof domain === "string") {
+            try { domain = JSON.parse(domain); } catch { return []; }
+        }
+        const rows = domain?.offerDetail?.featureAttributes;
+        if (!Array.isArray(rows)) return [];
+        const scalar = value => typeof value === "string" || typeof value === "number" && Number.isFinite(value);
+        return rows.flatMap(row => {
+            if (!row || typeof row !== "object" || typeof row.name !== "string" || !row.name.trim() || !Array.isArray(row.values)) return [];
+            const values = row.values.filter(scalar).map(value => String(value).trim()).filter(Boolean);
+            if (!values.length) return [];
+            const id = value => scalar(value) && /^\d{1,20}$/.test(String(value)) ? String(value) : undefined;
+            return [{
+                attrName: row.name.trim(),
+                attrNameId: id(row.fid),
+                attrValue: values.join(","),
+                attrValues: values,
+                attrValueIds: Array.isArray(row.vids) ? row.vids.map(id).filter(Boolean) : [],
+                unit: typeof row.unit === "string" ? row.unit.trim() : undefined,
+            }];
+        });
+    }
     function extractAttributesFromContext(data) {
-        const attrs = {};
+        const attrs = Object.fromEntries(extract1688SourceCategoryAttributes(data).map(row => [
+            row.attrName, row.unit ? `${row.attrValue}（${row.unit}）` : row.attrValue,
+        ]));
         const fields = getContextModuleFields(data, "productAttributes");
         if (!fields)
             return attrs;
@@ -1118,6 +1143,56 @@
             (typeof titleFields?.subTitle === "string" && titleFields.subTitle) ||
             document.title.replace(/-.*$/, "").trim() ||
             "");
+    }
+    function extract1688CategoryId(data) {
+        const category = getContextModuleFields(data, "categoryInfo");
+        const product = getContextModuleFields(data, "productInfo");
+        const root = getDataJson(data);
+        const numericId = (value) => {
+            const id = String(value ?? "").trim();
+            return /^[1-9]\d{0,19}$/.test(id) ? id : undefined;
+        };
+        const publishIds = [root?.tempModel?.postCategoryId, root?.tempModel?.catId, root?.offerBaseInfo?.catId]
+            .map(numericId).filter(Boolean);
+        if (new Set(publishIds).size > 1)
+            return undefined;
+        if (publishIds.length)
+            return publishIds[0];
+        const candidates = [
+            category?.categoryId, category?.catId, category?.leafCategoryId,
+            category?.category?.categoryId, category?.category?.id,
+            product?.categoryId, product?.catId,
+            root?.categoryId, root?.catId,
+            root?.category?.categoryId, root?.category?.id,
+            root?.product?.categoryId, root?.product?.catId,
+            root?.productInfo?.categoryId, root?.productInfo?.catId,
+            root?.offer?.categoryId, root?.offer?.catId,
+        ];
+        for (const value of candidates) {
+            const id = numericId(value);
+            if (id)
+                return id;
+        }
+        return extract1688CategoryIdFromDom();
+    }
+    function extract1688CategoryIdFromDom() {
+        const links = document.querySelectorAll("[class*='breadcrumb'] a[href], [class*='Breadcrumb'] a[href], nav[aria-label*='面包屑'] a[href]");
+        for (const link of Array.from(links).reverse()) {
+            let url;
+            try {
+                url = new URL(link.getAttribute("href") || "", location.href);
+            }
+            catch {
+                continue;
+            }
+            const candidates = [url.searchParams.get("categoryId"), url.searchParams.get("catId"), url.pathname.match(/\/(?:category|cat|c)\/(\d+)(?:\/|$)/i)?.[1]];
+            for (const value of candidates) {
+                const id = String(value ?? "").trim();
+                if (/^[1-9]\d{0,19}$/.test(id))
+                    return id;
+            }
+        }
+        return undefined;
     }
     function extractFromContext() {
         const data = get1688ContextData();
@@ -1179,6 +1254,8 @@
             sellerId: typeof shopFields?.shopId === "string" ? shopFields.shopId : undefined,
             sourceUrl: location.href,
             categoryPath: typeof categoryFields?.categoryPath === "string" ? categoryFields.categoryPath : undefined,
+            sourceCategoryId: extract1688CategoryId(data),
+            sourceCategoryAttributes: extract1688SourceCategoryAttributes(data),
             currency: "CNY",
             priceMin: priceBounds.priceMin,
             priceMax: priceBounds.priceMax,
@@ -1225,6 +1302,7 @@
             skuProps: [],
             skus: [],
             sourceUrl: location.href,
+            sourceCategoryId: extract1688CategoryIdFromDom(),
             currency: "CNY",
             collectedAt: new Date().toISOString(),
         };
@@ -1247,6 +1325,7 @@
             skuProps: ctx.skuProps.length > 0 ? ctx.skuProps : dom.skuProps,
             skus: ctx.skus.length > 0 ? ctx.skus : dom.skus,
             sellerName: ctx.sellerName || dom.sellerName,
+            sourceCategoryId: ctx.sourceCategoryId || dom.sourceCategoryId,
         };
     }
     const platform1688 = {
@@ -3066,7 +3145,7 @@
                     collectorNote: product.collectorNote,
                     sourceCollectedAt: product.collectedAt,
                     collectorMode: "full-product",
-                    collectorVersion: "2.1.0",
+                    collectorVersion: "2.1.3",
                     rawData: product,
                 };
                 GM_xmlhttpRequest({

@@ -14,6 +14,7 @@ import { productRoutes } from './routes/products.js';
 import { quoteRoutes } from './routes/quotes.js';
 import { productCollectionRoutes } from './routes/product-collections.js';
 import { aiRoutes } from './routes/ai.js';
+import { integration1688Routes } from './routes/1688.js';
 export async function buildApp() {
     const app = Fastify({
         logger: { level: config.NODE_ENV === 'production' ? 'info' : 'warn' },
@@ -23,7 +24,7 @@ export async function buildApp() {
     await app.register(cors, {
         origin: config.CORS_ORIGIN,
         credentials: true,
-        methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
         allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id', 'X-Collector-Key'],
     });
     await app.register(jwt, { secret: config.JWT_SECRET });
@@ -52,5 +53,6 @@ export async function buildApp() {
     await app.register(quoteRoutes, { prefix: '/api/quotes' });
     await app.register(productCollectionRoutes, { prefix: '/api/product-collections' });
     await app.register(aiRoutes, { prefix: '/api/ai' });
+    await app.register(integration1688Routes, { prefix: '/api/integrations/1688' });
     return app;
 }

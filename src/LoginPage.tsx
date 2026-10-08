@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { ArrowRight, Eye, EyeOff, Globe2, LockKeyhole, Mail, Radio, ShieldCheck } from 'lucide-react'
-import { ApiError, login, type SessionUser } from './api'
+import { ApiError, getCurrentUser, login, type SessionUser } from './api'
 
 export default function LoginPage({ onLogin }: { onLogin: (user: SessionUser) => void }) {
   const [email, setEmail] = useState('admin@local.crm')
@@ -11,7 +11,7 @@ export default function LoginPage({ onLogin }: { onLogin: (user: SessionUser) =>
 
   async function submit(event: FormEvent) {
     event.preventDefault(); setError(''); setLoading(true)
-    try { onLogin(await login(email, password)) }
+    try { await login(email, password); onLogin(await getCurrentUser()) }
     catch (cause) { setError(cause instanceof ApiError ? cause.message : '无法连接服务器，请确认后端服务已启动。') }
     finally { setLoading(false) }
   }

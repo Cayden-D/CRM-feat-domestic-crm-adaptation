@@ -26,6 +26,59 @@ async function getCollectorIdentity(request, reply) {
     return identity;
 }
 export async function productCollectionRoutes(app) {
+    app.post('/:id/promote', { preHandler: [requirePermission('collection:read'), requirePermission('product:create')] }, async (request, reply) => {
+        const id = idSchema.safeParse(request.params);
+        const input = z.object({ sku: z.string().trim().min(1).max(80), name: z.string().trim().min(1).max(200), category: z.string().trim().max(120).nullable().optional(), basePrice: z.number().finite().nonnegative(), description: z.string().max(10000).default(''), specifications: z.record(z.string(), z.string()).default({}), variants: z.array(z.object({ id: z.string().uuid(), price: z.number().finite().nonnegative(), stock: z.number().int().nonnegative().nullable() })).max(2000), reviewed: z.literal(true) }).safeParse(request.body);
+        if (!id.success || !input.success)
+            return reply.code(400).send({ error: 'VALIDATION_ERROR', message: '请核对产品字段、SKU 价格和库存。' });
+        const client = await db.connect();
+        try {
+            await client.query('BEGIN');
+            const source = (await client.query('SELECT * FROM collected_products WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [id.data.id, request.authUser.tenantId])).rows[0];
+            if (!source) {
+                await client.query('ROLLBACK');
+                return reply.code(404).send({ error: 'NOT_FOUND' });
+            }
+            if (source.product_id) {
+                await client.query('ROLLBACK');
+                return reply.code(409).send({ error: 'ALREADY_PROMOTED', message: '该采集记录已关联正式产品。' });
+            }
+            if ((await client.query("SELECT 1 FROM integration_1688_collection_queue_jobs WHERE collected_product_id=$1 AND status IN ('queued','processing','unknown')", [source.id])).rows.length) {
+                await client.query('ROLLBACK');
+                return reply.code(409).send({ error: 'QUEUE_ACTIVE', message: '该商品正在自动上品或结果待核对，请先查看队列。' });
+            }
+            if (source.currency !== 'CNY') {
+                await client.query('ROLLBACK');
+                return reply.code(400).send({ error: 'CURRENCY_MISMATCH', message: '当前正式产品只支持人民币，请先核实来源价格。' });
+            }
+            const variants = (await client.query('SELECT * FROM collected_product_variants WHERE collected_product_id=$1 AND tenant_id=$2 ORDER BY position', [source.id, request.authUser.tenantId])).rows;
+            const reviewed = new Map(input.data.variants.map(v => [v.id, v]));
+            if (reviewed.size !== variants.length || input.data.variants.length !== variants.length || variants.some(v => !reviewed.has(v.id))) {
+                await client.query('ROLLBACK');
+                return reply.code(409).send({ error: 'SOURCE_CHANGED', message: '采集 SKU 已变化，请重新打开审核。' });
+            }
+            const d = input.data;
+            const images = [...new Set([source.main_image_url, ...source.gallery_images].filter(Boolean))];
+            const product = (await client.query(`INSERT INTO products(tenant_id,sku,name,category,description,specifications,base_price,base_currency,status,images,detail_images,video_url)VALUES($1,$2,$3,$4,$5,$6,$7,'CNY','active',$8,$9,$10)RETURNING id,sku,name`, [request.authUser.tenantId, d.sku, d.name, d.category || null, d.description, JSON.stringify(d.specifications), d.basePrice, JSON.stringify(images), JSON.stringify(source.detail_images), source.video_url])).rows[0];
+            for (const variant of variants) {
+                const value = reviewed.get(variant.id);
+                await client.query('INSERT INTO product_variants(tenant_id,product_id,source_variant_id,position,label,attributes,image_url,unit_price,stock)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [request.authUser.tenantId, product.id, variant.id, variant.position, variant.label, JSON.stringify(variant.attributes), variant.image_url, value.price, value.stock]);
+            }
+            await client.query("UPDATE collected_products SET product_id=$2,processing_status='ready',updated_at=now() WHERE id=$1", [source.id, product.id]);
+            await client.query(`INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)VALUES($1,$2,'collection.promote','product',$3,$4,$5)`, [request.authUser.tenantId, request.authUser.sub, product.id, JSON.stringify({ sourceId: source.id, sku: d.sku, reviewed: true, variantCount: variants.length }), request.id]);
+            await client.query('COMMIT');
+            return reply.code(201).send({ data: product });
+        }
+        catch (error) {
+            await client.query('ROLLBACK');
+            if (error.code === '23505')
+                return reply.code(409).send({ error: 'SKU_EXISTS', message: '该产品 SKU 已存在，请更换货号。' });
+            throw error;
+        }
+        finally {
+            client.release();
+        }
+    });
     app.get('/collector-script.user.js', async (_request, reply) => { const script = await readFile(resolve(process.cwd(), 'scripts', '1688-product-collector.user.js'), 'utf8'); return reply.type('application/javascript; charset=utf-8').header('Content-Disposition', 'inline; filename="1688-product-collector.user.js"').send(script); });
     app.get('/session', async (request, reply) => { const identity = await getCollectorIdentity(request, reply); if (!identity)
         return; const user = (await db.query(`SELECT id,email::text,display_name FROM users WHERE id=$1 AND tenant_id=$2 AND status='active' AND deleted_at IS NULL`, [identity.user_id, identity.tenant_id])).rows[0]; if (!user)
@@ -58,13 +111,39 @@ export async function productCollectionRoutes(app) {
     } if (input.data.status) {
         values.push(input.data.status);
         where.push(`cp.processing_status=$${values.length}`);
-    } const result = await db.query(`SELECT cp.*,u.display_name AS collector_name,count(cpv.id)::int AS variant_count,min(cpv.price) AS min_price,max(cpv.price) AS max_price FROM collected_products cp LEFT JOIN users u ON u.id=cp.collected_by LEFT JOIN collected_product_variants cpv ON cpv.collected_product_id=cp.id WHERE ${where.join(' AND ')} GROUP BY cp.id,u.display_name ORDER BY cp.collected_at DESC`, values); return { data: result.rows }; });
+    } const result = await db.query(`SELECT cp.*,u.display_name AS collector_name,q.status AS queue_status,q.message AS queue_message,count(cpv.id)::int AS variant_count,min(cpv.price) AS min_price,max(cpv.price) AS max_price FROM collected_products cp LEFT JOIN users u ON u.id=cp.collected_by LEFT JOIN collected_product_variants cpv ON cpv.collected_product_id=cp.id LEFT JOIN LATERAL (SELECT status,message FROM integration_1688_collection_queue_jobs WHERE collected_product_id=cp.id ORDER BY created_at DESC LIMIT 1) q ON true WHERE ${where.join(' AND ')} GROUP BY cp.id,u.display_name,q.status,q.message ORDER BY cp.collected_at DESC`, values); return { data: result.rows }; });
     app.get('/:id', { preHandler: requirePermission('collection:read') }, async (request, reply) => { const id = idSchema.safeParse(request.params); if (!id.success)
-        return reply.code(400).send({ error: 'VALIDATION_ERROR' }); const product = (await db.query('SELECT * FROM collected_products WHERE id=$1 AND tenant_id=$2', [id.data.id, request.authUser.tenantId])).rows[0]; if (!product)
+        return reply.code(400).send({ error: 'VALIDATION_ERROR' }); const product = (await db.query('SELECT cp.*,q.status AS queue_status,q.message AS queue_message FROM collected_products cp LEFT JOIN LATERAL (SELECT status,message FROM integration_1688_collection_queue_jobs WHERE collected_product_id=cp.id ORDER BY created_at DESC LIMIT 1) q ON true WHERE cp.id=$1 AND cp.tenant_id=$2', [id.data.id, request.authUser.tenantId])).rows[0]; if (!product)
         return reply.code(404).send({ error: 'NOT_FOUND' }); const variants = await db.query('SELECT * FROM collected_product_variants WHERE collected_product_id=$1 ORDER BY position', [id.data.id]); return { data: { product, variants: variants.rows } }; });
-    app.delete('/:id', { preHandler: requirePermission('collection:delete') }, async (request, reply) => { const id = idSchema.safeParse(request.params); if (!id.success)
-        return reply.code(400).send({ error: 'VALIDATION_ERROR' }); const result = await db.query('DELETE FROM collected_products WHERE id=$1 AND tenant_id=$2 RETURNING id,title', [id.data.id, request.authUser.tenantId]); if (!result.rows[0])
-        return reply.code(404).send({ error: 'NOT_FOUND' }); await db.query(`INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,before_data,request_id)VALUES($1,$2,'collection.delete','collected_product',$3,$4,$5)`, [request.authUser.tenantId, request.authUser.sub, id.data.id, JSON.stringify(result.rows[0]), request.id]); return reply.code(204).send(); });
+    app.delete('/:id', { preHandler: requirePermission('collection:delete') }, async (request, reply) => {
+        const id = idSchema.safeParse(request.params);
+        if (!id.success)
+            return reply.code(400).send({ error: 'VALIDATION_ERROR' });
+        const client = await db.connect();
+        try {
+            await client.query('BEGIN');
+            const source = (await client.query('SELECT id,title FROM collected_products WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [id.data.id, request.authUser.tenantId])).rows[0];
+            if (!source) {
+                await client.query('ROLLBACK');
+                return reply.code(404).send({ error: 'NOT_FOUND' });
+            }
+            if ((await client.query("SELECT 1 FROM integration_1688_collection_queue_jobs WHERE collected_product_id=$1 AND status IN ('queued','processing','unknown')", [source.id])).rows.length) {
+                await client.query('ROLLBACK');
+                return reply.code(409).send({ error: 'QUEUE_ACTIVE', message: '队列任务仍在执行或结果待核对，不能删除采集记录。' });
+            }
+            await client.query('DELETE FROM collected_products WHERE id=$1', [source.id]);
+            await client.query(`INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,before_data,request_id)VALUES($1,$2,'collection.delete','collected_product',$3,$4,$5)`, [request.authUser.tenantId, request.authUser.sub, source.id, JSON.stringify(source), request.id]);
+            await client.query('COMMIT');
+            return reply.code(204).send();
+        }
+        catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        }
+        finally {
+            client.release();
+        }
+    });
     app.post('/import', async (request, reply) => { const identity = await getCollectorIdentity(request, reply); if (!identity)
         return; const input = importSchema.safeParse(request.body); if (!input.success)
         return reply.code(400).send({ error: 'VALIDATION_ERROR', message: '采集数据格式不正确。', details: input.error.flatten() }); const d = input.data; const client = await db.connect(); try {

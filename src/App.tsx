@@ -1,8 +1,9 @@
+import AgentQueueSettings from './AgentQueueSettings'
 import { useEffect, useMemo, useState } from 'react'
 import {
   Bell, Bot, Building2, ChevronDown, ChevronRight, CircleDollarSign, Command,
   Database, FileText, Gauge, HandCoins, LayoutDashboard, Mail, Menu, Mic, PackageCheck,
-  Plus, Search, Send, Settings, Sparkles, Target, LogOut, X, Zap, LoaderCircle,
+  Plus, Search, Send, Settings, Sparkles, Store, Target, LogOut, X, Zap, LoaderCircle,
 } from 'lucide-react'
 import { activities, customers, leads, opportunities, pipeline, priorities } from './data'
 import LoginPage from './LoginPage'
@@ -11,9 +12,11 @@ import CustomersPage from './CustomersPage'
 import OpportunitiesPage from './OpportunitiesPage'
 import QuotesPage from './QuotesPage'
 import ProductCollectionsPage from './ProductCollectionsPage'
+import Integration1688Page from './1688Page'
+import AgentSettingsPage from './AgentSettingsPage'
 import { ApiError,clearToken,getAiModels,getCurrentUser,getToken,sendAiMessage,type AiMessage,type AiModel,type SessionUser } from './api'
 
-type Page = 'dashboard' | 'leads' | 'customers' | 'opportunities' | 'quotes' | 'collections' | 'orders'
+type Page = 'dashboard' | 'leads' | 'customers' | 'opportunities' | 'quotes' | 'collections' | 'shop' | 'orders' | 'settings' | 'queue'
 
 const pageMeta: Record<Page, { title: string; eyebrow: string }> = {
   dashboard: { title: '销售作战台', eyebrow: '2026年8月5日 · 上海 13:40' },
@@ -22,6 +25,9 @@ const pageMeta: Record<Page, { title: string; eyebrow: string }> = {
   opportunities: { title: '商机管道', eyebrow: '从初步接触到合同签订' },
   quotes: { title: '报价管理', eyebrow: '人民币报价、含税金额与账期管理' },
   collections: { title: '1688 商品采集', eyebrow: '独立采集、查看并清洗源商品资料' },
+  shop: { title: '1688 店铺', eyebrow: '平台商品、发布工作台与连接设置' },
+  queue: {title:'上架队列',eyebrow:'跟踪采集商品的检测、资料准备与发布进度'},
+  settings: { title: '系统设置', eyebrow: '店铺 Agent 与自动发布授权' },
   orders: { title: '订单履约', eyebrow: '跟踪订单、国内交付与回款进度' },
 }
 
@@ -32,6 +38,8 @@ const nav: Array<{ id: Page; label: string; icon: typeof LayoutDashboard; count?
   { id: 'opportunities', label: '商机', icon: Target, count: 5 },
   { id: 'quotes', label: '报价管理', icon: FileText },
   { id: 'collections', label: '1688 商品采集', icon: Database },
+  { id: 'shop', label: '1688 店铺', icon: Store },
+  { id: 'queue', label: '上架队列', icon: PackageCheck },
   { id: 'orders', label: '订单履约', icon: PackageCheck },
 ]
 
@@ -50,7 +58,7 @@ function Sidebar({ page, setPage, open, close, user, onLogout }: { page: Page; s
         <button><Gauge size={18} /><span>数据分析</span></button>
       </nav>
       <div className="sidebar-foot">
-        <button><Settings size={18} /><span>系统设置</span></button>
+        <button className={page==='settings'?'active':''} onClick={()=>{setPage('settings');close()}}><Settings size={18} /><span>系统设置</span></button>
         <div className="profile"><div className="avatar">{user.displayName.slice(0, 1)}</div><div><b>{user.displayName}</b><small>{user.roles.includes('super_admin') ? '超级管理员' : '业务成员'}</small></div><button className="logout-button" onClick={onLogout} aria-label="退出登录"><LogOut size={16} /></button></div>
       </div>
     </aside>
@@ -142,7 +150,7 @@ function DataPage({ page, openAI }: { page: Page; openAI: (prompt?: string) => v
 }
 
 function AIAssistant({ open, close, initialPrompt, userName, page }: { open: boolean; close: () => void; initialPrompt: string; userName: string; page: Page }) {
-  const [value,setValue]=useState(''),[messages,setMessages]=useState<AiMessage[]>([]),[conversationId,setConversationId]=useState<string|null>(null),[model,setModel]=useState<AiModel>('qwen3.7-flash'),[models,setModels]=useState<AiModel[]>(['qwen3.7-flash','qwen3.7-plus','qwen3.6-plus']),[configured,setConfigured]=useState(true),[sending,setSending]=useState(false),[error,setError]=useState('')
+const [value,setValue]=useState(''),[messages,setMessages]=useState<AiMessage[]>([]),[conversationId,setConversationId]=useState<string|null>(null),[model,setModel]=useState<AiModel>('qwen3.8-flash'),[models,setModels]=useState<AiModel[]>(['qwen3.8-flash','qwen3.7-flash','qwen3.7-plus','qwen3.6-plus']),[configured,setConfigured]=useState(true),[sending,setSending]=useState(false),[error,setError]=useState('')
   useEffect(()=>{if(initialPrompt)setValue(initialPrompt)},[initialPrompt])
   useEffect(()=>{getAiModels().then(result=>{setModel(result.data.defaultModel);setModels(result.data.models);setConfigured(result.data.configured)}).catch(()=>{})},[])
   async function send(){const message=value.trim();if(!message||sending)return;setValue('');setError('');setMessages(current=>[...current,{id:`pending-${Date.now()}`,role:'user',content:message,input_tokens:null,output_tokens:null,latency_ms:null,created_at:new Date().toISOString()}]);setSending(true);try{const result=await sendAiMessage({message,conversationId,model,context:{page,pageTitle:pageMeta[page].title}});setConversationId(result.data.conversationId);setMessages(current=>[...current,result.data.message])}catch(cause){setError(cause instanceof ApiError?cause.message:'AI 暂时无法响应。')}finally{setSending(false)}}
@@ -180,7 +188,7 @@ export default function App() {
     <Sidebar page={page} setPage={setPage} open={menuOpen} close={() => setMenuOpen(false)} user={session} onLogout={logout} />
     <main className={aiOpen ? 'main ai-visible' : 'main'}>
       <Topbar page={page} openMenu={() => setMenuOpen(true)} openAI={() => openAI()} />
-      <div className="page-content">{page === 'dashboard' ? <Dashboard openAI={openAI} /> : page === 'leads' ? <LeadsPage /> : page === 'customers' ? <CustomersPage /> : page === 'opportunities' ? <OpportunitiesPage /> : page === 'quotes' ? <QuotesPage /> : page === 'collections' ? <ProductCollectionsPage /> : <DataPage page={page} openAI={openAI} />}</div>
+      <div className="page-content">{page === 'dashboard' ? <Dashboard openAI={openAI} /> : page === 'leads' ? <LeadsPage /> : page === 'customers' ? <CustomersPage /> : page === 'opportunities' ? <OpportunitiesPage /> : page === 'quotes' ? <QuotesPage /> : page === 'collections' ? <ProductCollectionsPage user={session} /> : page === 'shop' ? <Integration1688Page user={session} onCollections={()=>setPage('collections')}/> : page === 'queue' ? <AgentQueueSettings user={session}/> : page === 'settings' ? <AgentSettingsPage user={session}/> : <DataPage page={page} openAI={openAI} />}</div>
     </main>
     <button className={`ai-fab ${aiOpen ? 'hidden' : ''}`} onClick={() => openAI()}><Sparkles size={20} /><span>问销途 AI</span></button>
     <AIAssistant open={aiOpen} close={() => setAiOpen(false)} initialPrompt={prompt} userName={session.displayName} page={page} />

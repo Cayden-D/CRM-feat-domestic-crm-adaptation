@@ -1,5 +1,5 @@
 import { config } from '../config.js';
-export const QWEN_MODELS = ['qwen3.7-flash', 'qwen3.7-plus', 'qwen3.6-plus'];
+export const QWEN_MODELS = ['qwen3.8-flash', 'qwen3.7-flash', 'qwen3.7-plus', 'qwen3.6-plus'];
 export class LlmConfigurationError extends Error {
 }
 export class LlmRequestError extends Error {
@@ -18,7 +18,7 @@ export async function generateQwenText(input) {
     const model = input.model ?? config.QWEN_DEFAULT_MODEL;
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), config.QWEN_TIMEOUT_MS);
     try {
-        const response = await fetch(`${config.DASHSCOPE_BASE_URL.replace(/\/$/, '')}/chat/completions`, { method: 'POST', headers: { Authorization: `Bearer ${config.DASHSCOPE_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model, messages: input.messages, temperature: input.temperature ?? 0.4, max_tokens: input.maxTokens ?? 2000 }), signal: controller.signal });
+        const response = await fetch(`${config.DASHSCOPE_BASE_URL.replace(/\/$/, '')}/chat/completions`, { method: 'POST', headers: { Authorization: `Bearer ${config.DASHSCOPE_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model, messages: input.messages, temperature: input.temperature ?? 0.4, max_tokens: input.maxTokens ?? 2000, ...(input.json ? { response_format: { type: 'json_object' }, enable_thinking: false } : {}) }), signal: controller.signal });
         const body = await response.json().catch(() => ({}));
         if (!response.ok)
             throw new LlmRequestError(body.error?.message || body.message || `千问接口返回 HTTP ${response.status}`, response.status, body.error);

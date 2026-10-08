@@ -13,7 +13,7 @@ if (!address || typeof address === 'string')
     throw new Error('Fake Qwen server failed to start');
 process.env.DASHSCOPE_API_KEY = 'test-dashscope-key';
 process.env.DASHSCOPE_BASE_URL = `http://127.0.0.1:${address.port}/compatible-mode/v1`;
-process.env.QWEN_DEFAULT_MODEL = 'qwen3.7-flash';
+process.env.QWEN_DEFAULT_MODEL = 'qwen3.8-flash';
 const [{ buildApp }, { db }, { createTestAdmin, deleteTestAdmin }] = await Promise.all([import('../server/app.js'), import('../server/db.js'), import('./test-auth.js')]);
 const app = await buildApp();
 let testUserId = '', conversationId = '';
@@ -26,13 +26,13 @@ try {
     const models = await app.inject({ method: 'GET', url: '/api/ai/models', headers: { authorization } });
     assert.equal(models.statusCode, 200, models.body);
     assert.equal(models.json().data.configured, true);
-    assert.equal(models.json().data.defaultModel, 'qwen3.7-flash');
-    assert.deepEqual(models.json().data.models, ['qwen3.7-flash', 'qwen3.7-plus', 'qwen3.6-plus']);
+    assert.equal(models.json().data.defaultModel, 'qwen3.8-flash');
+    assert.deepEqual(models.json().data.models, ['qwen3.8-flash', 'qwen3.7-flash', 'qwen3.7-plus', 'qwen3.6-plus']);
     const chat = await app.inject({ method: 'POST', url: '/api/ai/chat', headers: { authorization }, payload: { message: '请介绍你的能力', context: { page: 'dashboard', pageTitle: '销售作战台' } } });
     assert.equal(chat.statusCode, 200, chat.body);
     conversationId = chat.json().data.conversationId;
     assert.equal(chat.json().data.message.content, '这是来自千问测试适配器的回答。');
-    assert.equal(lastRequest().model, 'qwen3.7-flash');
+    assert.equal(lastRequest().model, 'qwen3.8-flash');
     assert.equal(lastRequest().messages[0].role, 'system');
     const followUp = await app.inject({ method: 'POST', url: '/api/ai/chat', headers: { authorization }, payload: { message: '继续', conversationId, model: 'qwen3.7-plus' } });
     assert.equal(followUp.statusCode, 200, followUp.body);
@@ -45,7 +45,7 @@ try {
     assert.equal(history.json().data.messages[1].output_tokens, 12);
     const unsupported = await app.inject({ method: 'POST', url: '/api/ai/chat', headers: { authorization }, payload: { message: 'test', model: 'not-allowed' } });
     assert.equal(unsupported.statusCode, 400, unsupported.body);
-    console.log(JSON.stringify({ qwenCompatibleApi: 'ok', defaultModel: 'qwen3.7-flash', modelSwitch: 'ok', conversationPersistence: 'ok', tokenUsage: 'ok', modelWhitelist: 'ok' }));
+    console.log(JSON.stringify({ qwenCompatibleApi: 'ok', defaultModel: 'qwen3.8-flash', modelSwitch: 'ok', conversationPersistence: 'ok', tokenUsage: 'ok', modelWhitelist: 'ok' }));
 }
 finally {
     if (conversationId)
